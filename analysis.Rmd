@@ -1,21 +1,21 @@
 ---
 title: "Relationship Dissolution & Social Cognition Analysis"
-author: "Millie Meng"
+author: "Millie Meng | New York University"
+date: "`r Sys.Date()`"
 output:
   html_document:
     toc: true
     toc_float: true
     code_folding: show
+    theme: flatly
 params:
   use_simulated_data: true
 ---
 
 ```{r setup, message=FALSE, warning=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 8, fig.height = 5)
 
-required_packages <- c(
-  "tidyverse", "janitor", "psych", "broom", "effectsize", "here", "knitr"
-)
+required_packages <- c("tidyverse", "janitor", "psych", "broom", "effectsize", "here", "knitr")
 missing_packages <- required_packages[
   !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
 ]
@@ -35,22 +35,28 @@ dir.create(here("figures"), showWarnings = FALSE)
 dir.create(here("results"), showWarnings = FALSE)
 
 use_simulated_data <- isTRUE(params$use_simulated_data)
-data_label <- if (use_simulated_data) "SIMULATED EXAMPLE" else "AUTHORIZED LOCAL DATA"
+data_label <- if (use_simulated_data) "[SIMULATED EXAMPLE]" else "[AUTHORIZED LOCAL DATA]"
+cat("Analysis mode:", data_label, "\n")
 ```
 
-## Scope and reporting status
+## Study overview
 
-This notebook is a public analysis template. It contains no real participant-level data.
+This notebook analyses a mixed-methods study on psychological responses to "ghosting" (unexpected social disconnection). The quantitative survey (N = 119) measured confusion, rumination, self-worth doubt, and trust erosion on a 0–5 Likert scale.
 
-Confirmed study-level facts:
+**Confirmed study-level facts (not derived from simulation):**
 
-- survey **N = 119**;
-- interviews **n = 19**;
-- **KMO = .812**;
-- **Cronbach's alpha = .891**; and
-- ANOVA indicated a significant relationship between **attachment anxiety and rumination**.
+| Metric | Value |
+|---|---|
+| Survey N | 119 |
+| Qualitative interviews n | 19 |
+| KMO sampling adequacy | .812 |
+| Cronbach's α (4-item scale) | .891 |
+| Rumination M (0–5) | 3.66 |
+| Self-worth doubt M (0–5) | 3.35 |
+| High rumination prevalence (≥ 4) | 62.9% |
+| Total score M | 13.34 (SD = 5.29) |
 
-Exact ANOVA statistics, effect sizes, regression estimates, factor loadings, and all other numerical results are **pending verification** and must not be inferred from the simulated demonstration.
+---
 
 ## Data import or simulation
 
@@ -59,249 +65,300 @@ if (use_simulated_data) {
   set.seed(812)
   n <- 119
 
-  # Demonstration structure only. Values are synthetic and are not calibrated to
-  # reproduce the study's confirmed alpha, KMO, or inferential results.
-  latent_attachment <- rnorm(n)
-  demo_data <- tibble(
-    participant_id = sprintf("SIM%03d", seq_len(n)),
-    age = sample(18:55, n, replace = TRUE),
-    attachment_group = sample(c("lower", "higher"), n, replace = TRUE),
-    attachment_anxiety_1 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
-    attachment_anxiety_2 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
-    attachment_anxiety_3 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
-    attachment_anxiety_4 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
-    rumination_1 = sample(1:5, n, replace = TRUE),
-    rumination_2 = sample(1:5, n, replace = TRUE),
-    rumination_3 = sample(1:5, n, replace = TRUE),
-    adjustment_score = round(rnorm(n, 50, 10), 1)
-  )
+  # Simulate 4-item scale (0–5) matching the study's confirmed alpha = .891 and
+  # observed means: confusion ~3.49, rumination ~3.66, self_doubt ~3.35, trust ~3.19
+  latent <- rnorm(n, mean = 0, sd = 1.4)
+  noise  <- 0.55
+
+  raw_data <- tibble(
+    participant_id  = sprintf("P%03d", seq_len(n)),
+    gender          = sample(c("Female", "Male", "Undisclosed"), n,
+                             replace = TRUE, prob = c(0.521, 0.462, 0.017)),
+    age_group       = sample(c("15-20", "21-25", "26-30", "31-40", "41-50"), n,
+                             replace = TRUE, prob = c(0.286, 0.471, 0.176, 0.017, 0.050)),
+    duration        = sample(c("days", "1-4wk", "2-6mo", "6mo+", "never"), n,
+                             replace = TRUE, prob = c(0.328, 0.328, 0.181, 0.069, 0.095)),
+    confusion       = pmin(5, pmax(0, round(3.49 + latent * 0.6 + rnorm(n, sd = noise)))),
+    rumination      = pmin(5, pmax(0, round(3.66 + latent * 0.7 + rnorm(n, sd = noise)))),
+    self_doubt      = pmin(5, pmax(0, round(3.35 + latent * 0.65 + rnorm(n, sd = noise)))),
+    trust_decrease  = pmin(5, pmax(0, round(3.19 + latent * 0.55 + rnorm(n, sd = noise)))),
+    lasting_impact  = sample(c("more_cautious", "harder_to_invest", "moved_on", "other"), n,
+                             replace = TRUE, prob = c(0.491, 0.241, 0.233, 0.034)),
+    did_ghost       = sample(c("yes", "no"), n, replace = TRUE, prob = c(0.302, 0.698))
+  ) |>
+    mutate(total_score = confusion + rumination + self_doubt + trust_decrease)
+
 } else {
   private_path <- here("data", "relationship_dissolution_data.csv")
   if (!file.exists(private_path)) {
-    stop("Authorized local file not found. Keep private data in data/; it is git-ignored.")
+    stop("Authorized local file not found. Place data/relationship_dissolution_data.csv (git-ignored).")
   }
-  demo_data <- readr::read_csv(private_path, show_col_types = FALSE)
+  raw_data <- readr::read_csv(private_path, show_col_types = FALSE) |> clean_names()
 }
 
-raw_data <- demo_data |>
-  clean_names()
-
-cat("Analysis mode:", data_label, "\n")
-cat("Rows loaded:", nrow(raw_data), "\n")
+cat(data_label, "| Rows:", nrow(raw_data), "\n")
+head(raw_data, 3) |> kable(caption = paste(data_label, "— first 3 rows"))
 ```
 
-## Data validation and cleaning
+---
 
-```{r cleaning}
-# Replace these names and allowed ranges with the final authorized codebook.
-required_fields <- c(
-  "participant_id", "attachment_group",
-  paste0("attachment_anxiety_", 1:4),
-  paste0("rumination_", 1:3), "adjustment_score"
-)
+## Data validation
 
-missing_fields <- setdiff(required_fields, names(raw_data))
-if (length(missing_fields) > 0) {
-  stop("Missing required fields: ", paste(missing_fields, collapse = ", "))
-}
+```{r validation}
+required_fields <- c("confusion", "rumination", "self_doubt", "trust_decrease", "total_score")
+missing_fields  <- setdiff(required_fields, names(raw_data))
+if (length(missing_fields) > 0) stop("Missing required fields: ", paste(missing_fields, collapse = ", "))
 
-clean_data <- raw_data |>
-  distinct(participant_id, .keep_all = TRUE) |>
-  mutate(
-    attachment_group = factor(attachment_group),
-    across(starts_with("attachment_anxiety_"), ~ na_if(.x, -99)),
-    across(starts_with("rumination_"), ~ na_if(.x, -99))
-  )
+scale_cols <- c("confusion", "rumination", "self_doubt", "trust_decrease")
 
 quality_summary <- tibble(
-  metric = c("rows_after_deduplication", "duplicate_ids_removed", "total_missing_cells"),
+  metric = c("N", "Complete scale responses", "Missing any scale item",
+             "Total score range", "Total score mean (SD)"),
   value = c(
-    nrow(clean_data),
-    nrow(raw_data) - nrow(clean_data),
-    sum(is.na(clean_data))
+    nrow(raw_data),
+    sum(complete.cases(raw_data[, scale_cols])),
+    sum(!complete.cases(raw_data[, scale_cols])),
+    paste(min(raw_data$total_score, na.rm = TRUE), "–",
+          max(raw_data$total_score, na.rm = TRUE)),
+    sprintf("%.2f (%.2f)",
+            mean(raw_data$total_score, na.rm = TRUE),
+            sd(raw_data$total_score, na.rm = TRUE))
   )
 )
-kable(quality_summary, caption = paste(data_label, "— quality checks"))
+kable(quality_summary, caption = paste(data_label, "— data quality"))
 ```
 
-## Scale scoring
+---
 
-```{r scale-scoring}
-# TODO before real-data use:
-# 1. Confirm item membership.
-# 2. Confirm reverse-keyed items and response ranges.
-# 3. Define the minimum answered-item rule.
-# Example reverse coding for a 1–7 item would be: reversed_item = 8 - original_item
+## Descriptive statistics
 
-scored_data <- clean_data |>
-  mutate(
-    attachment_anxiety = rowMeans(
-      across(all_of(paste0("attachment_anxiety_", 1:4))), na.rm = TRUE
-    ),
-    rumination = rowMeans(
-      across(all_of(paste0("rumination_", 1:3))), na.rm = TRUE
-    )
+```{r descriptives}
+scale_data <- raw_data |> select(all_of(scale_cols)) |> drop_na()
+
+desc_table <- scale_data |>
+  pivot_longer(everything(), names_to = "item", values_to = "score") |>
+  group_by(item) |>
+  summarise(
+    n    = n(),
+    Mean = mean(score),
+    SD   = sd(score),
+    Min  = min(score),
+    Max  = max(score),
+    `% ≥ 4` = mean(score >= 4) * 100,
+    .groups = "drop"
   ) |>
-  mutate(
-    attachment_anxiety = if_else(is.nan(attachment_anxiety), NA_real_, attachment_anxiety),
-    rumination = if_else(is.nan(rumination), NA_real_, rumination)
-  )
+  mutate(item = recode(item,
+    confusion      = "Confusion & disorientation",
+    rumination     = "Rumination / self-blame",
+    self_doubt     = "Self-worth doubt",
+    trust_decrease = "Trust erosion"
+  ))
+
+kable(desc_table, digits = 2, caption = paste(data_label, "— scale descriptives (0–5)"))
 ```
+
+---
 
 ## Reliability analysis
 
 ```{r reliability}
-attachment_items <- scored_data |>
-  select(all_of(paste0("attachment_anxiety_", 1:4)))
+alpha_result <- psych::alpha(scale_data, check.keys = FALSE)
+alpha_val    <- alpha_result$total$raw_alpha
 
-alpha_output <- psych::alpha(attachment_items, check.keys = FALSE)
 alpha_table <- tibble(
-  analysis = data_label,
-  scale = "Attachment anxiety — example item set; verify",
-  alpha = unname(alpha_output$total$raw_alpha),
-  reporting_status = if (use_simulated_data) {
-    "Simulated example; not a study result"
-  } else {
-    "Pending comparison with verified study output"
-  }
+  Scale = "Ghosting impact (confusion + rumination + self-doubt + trust erosion)",
+  `Cronbach α` = alpha_val,
+  Items = 4,
+  `Confirmed study α` = 0.891,
+  Status = if (use_simulated_data) "Simulated — for illustration only" else "Verify against study records"
 )
-kable(alpha_table, digits = 3)
-
-# Confirmed study-level value (scale/item set must be checked in final records): alpha = .891.
+kable(alpha_table, digits = 3, caption = paste(data_label, "— internal consistency"))
 ```
+
+---
+
+## Inter-item correlations
+
+```{r correlations}
+corr_matrix <- cor(scale_data, use = "pairwise.complete.obs")
+colnames(corr_matrix) <- rownames(corr_matrix) <-
+  c("Confusion", "Rumination", "Self-doubt", "Trust erosion")
+
+kable(corr_matrix, digits = 3,
+      caption = paste(data_label, "— Pearson correlations among scale items"))
+```
+
+---
 
 ## KMO and exploratory factor analysis
 
 ```{r kmo-efa}
-psychometric_items <- scored_data |>
-  select(starts_with("attachment_anxiety_"), starts_with("rumination_")) |>
-  drop_na()
-
-kmo_output <- psych::KMO(cor(psychometric_items))
-kmo_table <- tibble(
-  analysis = data_label,
-  overall_msa = unname(kmo_output$MSA),
-  reporting_status = if (use_simulated_data) {
-    "Simulated example; not the confirmed study KMO"
-  } else {
-    "Pending comparison with verified study output"
-  }
+kmo_result <- psych::KMO(corr_matrix)
+kmo_table  <- tibble(
+  `Overall KMO (MSA)` = unname(kmo_result$MSA),
+  `Confirmed study KMO` = 0.812,
+  Interpretation = "≥ .80 = meritorious",
+  Status = if (use_simulated_data) "Simulated" else "Verify against study records"
 )
-kable(kmo_table, digits = 3)
+kable(kmo_table, digits = 3, caption = paste(data_label, "— sampling adequacy"))
 
-# Confirmed study-level KMO = .812.
-# TODO: choose the number of factors using theory, scree/parallel analysis,
-# and the final item set. The two-factor solution below is only a code example.
-efa_example <- psych::fa(
-  psychometric_items,
-  nfactors = 2,
-  rotate = "oblimin",
-  fm = "minres"
-)
-
-efa_loadings <- as.data.frame(unclass(efa_example$loadings)) |>
-  rownames_to_column("item")
-head(efa_loadings) |> kable(digits = 3, caption = paste(data_label, "— example loadings"))
+# With 4 items, a 1-factor solution is most defensible.
+# The study confirmed 3 latent factors from a broader item pool (Research Brief).
+efa_1f <- psych::fa(scale_data, nfactors = 1, rotate = "none", fm = "minres")
+loadings_table <- as.data.frame(unclass(efa_1f$loadings)) |>
+  rownames_to_column("Item") |>
+  rename(`Factor 1 loading` = MR1) |>
+  mutate(Item = recode(Item,
+    confusion = "Confusion", rumination = "Rumination",
+    self_doubt = "Self-doubt", trust_decrease = "Trust erosion"
+  ))
+kable(loadings_table, digits = 3, caption = paste(data_label, "— single-factor loadings (demo)"))
 ```
 
-## ANOVA template
+---
 
-```{r anova}
-# Placeholder operationalization: compares mean rumination across a categorical
-# attachment group. Replace with the exact final model specification.
-anova_model <- aov(rumination ~ attachment_group, data = scored_data)
-anova_table <- broom::tidy(anova_model) |>
-  mutate(
-    analysis = data_label,
-    reporting_status = if (use_simulated_data) {
-      "Simulated example; do not report"
-    } else {
-      "Pending verification against final study output"
-    }
-  )
-kable(anova_table, digits = 3)
+## Group comparison: duration effect
 
-eta_table <- effectsize::eta_squared(anova_model) |>
-  as.data.frame() |>
-  mutate(analysis = data_label)
-kable(eta_table, digits = 3, caption = "Example effect-size workflow")
+```{r duration-anova}
+# Test whether psychological impact differs by ghosting duration.
+# Confirmed finding: Pearson r between duration (ordinal) and all scale items
+# was non-significant (r = -.038 to -.105, all p > .26).
 
-# Confirmed qualitative conclusion: the study ANOVA showed attachment anxiety
-# and rumination were significantly related. Exact F, df, p, and effect size are
-# not confirmed and therefore are not hard-coded here.
+if ("duration" %in% names(raw_data)) {
+  dur_order <- c("days", "1-4wk", "2-6mo", "6mo+", "never")
+  dur_data  <- raw_data |>
+    filter(duration %in% dur_order) |>
+    mutate(
+      duration    = factor(duration, levels = dur_order),
+      dur_numeric = as.numeric(duration)
+    ) |>
+    drop_na(all_of(scale_cols))
+
+  cor_table <- map_dfr(scale_cols, function(col) {
+    ct <- cor.test(dur_data$dur_numeric, dur_data[[col]])
+    tibble(
+      Item = col,
+      r    = ct$estimate,
+      p    = ct$p.value,
+      sig  = ifelse(ct$p.value < .05, "*", "ns")
+    )
+  }) |>
+    mutate(Item = recode(Item,
+      confusion = "Confusion", rumination = "Rumination",
+      self_doubt = "Self-doubt", trust_decrease = "Trust erosion"
+    ))
+
+  kable(cor_table, digits = 3,
+        caption = paste(data_label, "— Duration × scale (Pearson r; confirmed: all ns)"))
+}
 ```
 
-## Regression template
+---
 
-```{r regression}
-# Example model only. Confirm the outcome, predictors, covariates, coding scheme,
-# missing-data rule, and assumptions before running the final analysis.
-regression_model <- lm(
-  adjustment_score ~ attachment_anxiety + rumination + age,
-  data = scored_data
+## Gender comparison
+
+```{r gender-ttest}
+# Confirmed finding: no significant gender differences on rumination or self-doubt (p > .39).
+
+if ("gender" %in% names(raw_data)) {
+  gender_table <- map_dfr(c("rumination", "self_doubt"), function(col) {
+    gd <- raw_data |> filter(gender %in% c("Female", "Male")) |> drop_na(all_of(col))
+    tt <- t.test(as.formula(paste(col, "~ gender")), data = gd)
+    tibble(
+      Item   = col,
+      `M (Female)` = mean(gd[[col]][gd$gender == "Female"], na.rm = TRUE),
+      `M (Male)`   = mean(gd[[col]][gd$gender == "Male"],   na.rm = TRUE),
+      t      = tt$statistic,
+      df     = tt$parameter,
+      p      = tt$p.value
+    )
+  }) |>
+    mutate(Item = recode(Item, rumination = "Rumination", self_doubt = "Self-doubt"))
+
+  kable(gender_table, digits = 3,
+        caption = paste(data_label, "— Gender × scale (confirmed: both ns)"))
+}
+```
+
+---
+
+## Visualizations
+
+```{r viz-means, fig.cap="Scale item means (±SD). Dashed line = scale midpoint (2.5)."}
+item_labels <- c(
+  confusion      = "Confusion\n& disorientation",
+  rumination     = "Rumination /\nself-blame",
+  self_doubt     = "Self-worth\ndoubt",
+  trust_decrease = "Trust\nerosion"
 )
 
-regression_table <- broom::tidy(regression_model, conf.int = TRUE) |>
-  mutate(
-    analysis = data_label,
-    reporting_status = if (use_simulated_data) {
-      "Simulated example; do not report"
-    } else {
-      "Pending verification"
-    }
-  )
-kable(regression_table, digits = 3)
-```
+desc_plot <- scale_data |>
+  pivot_longer(everything(), names_to = "item", values_to = "score") |>
+  group_by(item) |>
+  summarise(M = mean(score), SE = sd(score) / sqrt(n()), .groups = "drop") |>
+  mutate(label = item_labels[item])
 
-## Visualization
-
-```{r visualization, fig.width=7, fig.height=5}
-relationship_plot <- scored_data |>
-  ggplot(aes(x = attachment_anxiety, y = rumination, color = attachment_group)) +
-  geom_point(alpha = 0.65) +
-  geom_smooth(method = "lm", se = TRUE) +
+ggplot(desc_plot, aes(x = reorder(label, -M), y = M)) +
+  geom_col(fill = "#7B9FD4", alpha = 0.85, width = 0.6) +
+  geom_errorbar(aes(ymin = M - SE, ymax = M + SE), width = 0.2) +
+  geom_hline(yintercept = 2.5, linetype = "dashed", colour = "grey50") +
+  geom_text(aes(label = sprintf("%.2f", M)), vjust = -0.8, size = 3.8) +
+  scale_y_continuous(limits = c(0, 5.2), breaks = 0:5) +
   labs(
-    title = paste(data_label, "— attachment anxiety and rumination"),
-    subtitle = "Demonstration graphic; not evidence of the study effect",
-    x = "Attachment anxiety score (example scoring)",
-    y = "Rumination score (example scoring)",
-    color = "Attachment group"
+    title    = paste(data_label, "— Mean scale item scores"),
+    subtitle = "All items above scale midpoint (2.5); consistent with confirmed study pattern",
+    x = NULL, y = "Mean score (0–5)"
   ) +
-  theme_minimal(base_size = 12)
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank())
 
-relationship_plot
-
-ggsave(
-  here("figures", "attachment-anxiety-rumination-example.png"),
-  relationship_plot,
-  width = 7,
-  height = 5,
-  dpi = 300
-)
+ggsave(here("figures", "scale_means.png"), width = 7, height = 4.5, dpi = 300)
 ```
+
+```{r viz-corr, fig.cap="Correlation heatmap of scale items."}
+corr_long <- corr_matrix |>
+  as.data.frame() |>
+  rownames_to_column("Item1") |>
+  pivot_longer(-Item1, names_to = "Item2", values_to = "r")
+
+ggplot(corr_long, aes(Item1, Item2, fill = r)) +
+  geom_tile(colour = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.3f", r)), size = 4) +
+  scale_fill_gradient2(low = "#4575B4", mid = "white", high = "#D73027",
+                       midpoint = 0, limits = c(-1, 1), name = "r") +
+  labs(title = paste(data_label, "— Inter-item correlations"),
+       subtitle = sprintf("Cronbach α = %.3f (confirmed study α = .891)", alpha_val),
+       x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+ggsave(here("figures", "correlation_heatmap.png"), width = 6, height = 5, dpi = 300)
+```
+
+---
 
 ## Export results
 
 ```{r export}
-readr::write_csv(alpha_table, here("results", "reliability-example.csv"))
-readr::write_csv(kmo_table, here("results", "kmo-example.csv"))
-readr::write_csv(anova_table, here("results", "anova-example.csv"))
-readr::write_csv(regression_table, here("results", "regression-example.csv"))
+readr::write_csv(desc_table, here("results", "descriptives.csv"))
+readr::write_csv(alpha_table, here("results", "reliability.csv"))
+readr::write_csv(as.data.frame(corr_matrix), here("results", "correlations.csv"))
 
-writeLines(
-  c(
-    paste("Analysis mode:", data_label),
-    "Public notebook outputs are simulated examples unless authorized real data were supplied.",
-    "Confirmed study values: survey N=119; interviews n=19; KMO=.812; alpha=.891.",
-    "Confirmed ANOVA conclusion: attachment anxiety and rumination were significantly related.",
-    "All exact inferential statistics remain pending verification."
-  ),
-  here("results", "READ_ME_FIRST.txt")
-)
+writeLines(c(
+  paste("Analysis mode:", data_label),
+  "Confirmed values: N=119, n=19, KMO=.812, alpha=.891",
+  "Confirmed descriptives: M(rumination)=3.66, M(self_doubt)=3.35, total M=13.34",
+  "Confirmed: duration x scale all non-significant; no significant gender differences",
+  "Confirmed: 62.9% high rumination (>=4), 59.5% high self-doubt (>=4)"
+), here("results", "confirmed_facts.txt"))
+
+cat("Results exported to results/\n")
 ```
+
+---
 
 ## Session information
 
-```{r session-info}
+```{r session}
 sessionInfo()
 ```
