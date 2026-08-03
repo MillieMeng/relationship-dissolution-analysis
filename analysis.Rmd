@@ -1,0 +1,307 @@
+---
+title: "Relationship Dissolution & Social Cognition Analysis"
+author: "Millie Meng"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+params:
+  use_simulated_data: true
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+required_packages <- c(
+  "tidyverse", "janitor", "psych", "broom", "effectsize", "here", "knitr"
+)
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages) > 0) {
+  stop("Install required packages first: ", paste(missing_packages, collapse = ", "))
+}
+
+library(tidyverse)
+library(janitor)
+library(psych)
+library(broom)
+library(effectsize)
+library(here)
+library(knitr)
+
+dir.create(here("figures"), showWarnings = FALSE)
+dir.create(here("results"), showWarnings = FALSE)
+
+use_simulated_data <- isTRUE(params$use_simulated_data)
+data_label <- if (use_simulated_data) "SIMULATED EXAMPLE" else "AUTHORIZED LOCAL DATA"
+```
+
+## Scope and reporting status
+
+This notebook is a public analysis template. It contains no real participant-level data.
+
+Confirmed study-level facts:
+
+- survey **N = 119**;
+- interviews **n = 19**;
+- **KMO = .812**;
+- **Cronbach's alpha = .891**; and
+- ANOVA indicated a significant relationship between **attachment anxiety and rumination**.
+
+Exact ANOVA statistics, effect sizes, regression estimates, factor loadings, and all other numerical results are **pending verification** and must not be inferred from the simulated demonstration.
+
+## Data import or simulation
+
+```{r data-import}
+if (use_simulated_data) {
+  set.seed(812)
+  n <- 119
+
+  # Demonstration structure only. Values are synthetic and are not calibrated to
+  # reproduce the study's confirmed alpha, KMO, or inferential results.
+  latent_attachment <- rnorm(n)
+  demo_data <- tibble(
+    participant_id = sprintf("SIM%03d", seq_len(n)),
+    age = sample(18:55, n, replace = TRUE),
+    attachment_group = sample(c("lower", "higher"), n, replace = TRUE),
+    attachment_anxiety_1 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
+    attachment_anxiety_2 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
+    attachment_anxiety_3 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
+    attachment_anxiety_4 = pmin(pmax(round(4 + latent_attachment + rnorm(n)), 1), 7),
+    rumination_1 = sample(1:5, n, replace = TRUE),
+    rumination_2 = sample(1:5, n, replace = TRUE),
+    rumination_3 = sample(1:5, n, replace = TRUE),
+    adjustment_score = round(rnorm(n, 50, 10), 1)
+  )
+} else {
+  private_path <- here("data", "relationship_dissolution_data.csv")
+  if (!file.exists(private_path)) {
+    stop("Authorized local file not found. Keep private data in data/; it is git-ignored.")
+  }
+  demo_data <- readr::read_csv(private_path, show_col_types = FALSE)
+}
+
+raw_data <- demo_data |>
+  clean_names()
+
+cat("Analysis mode:", data_label, "\n")
+cat("Rows loaded:", nrow(raw_data), "\n")
+```
+
+## Data validation and cleaning
+
+```{r cleaning}
+# Replace these names and allowed ranges with the final authorized codebook.
+required_fields <- c(
+  "participant_id", "attachment_group",
+  paste0("attachment_anxiety_", 1:4),
+  paste0("rumination_", 1:3), "adjustment_score"
+)
+
+missing_fields <- setdiff(required_fields, names(raw_data))
+if (length(missing_fields) > 0) {
+  stop("Missing required fields: ", paste(missing_fields, collapse = ", "))
+}
+
+clean_data <- raw_data |>
+  distinct(participant_id, .keep_all = TRUE) |>
+  mutate(
+    attachment_group = factor(attachment_group),
+    across(starts_with("attachment_anxiety_"), ~ na_if(.x, -99)),
+    across(starts_with("rumination_"), ~ na_if(.x, -99))
+  )
+
+quality_summary <- tibble(
+  metric = c("rows_after_deduplication", "duplicate_ids_removed", "total_missing_cells"),
+  value = c(
+    nrow(clean_data),
+    nrow(raw_data) - nrow(clean_data),
+    sum(is.na(clean_data))
+  )
+)
+kable(quality_summary, caption = paste(data_label, "— quality checks"))
+```
+
+## Scale scoring
+
+```{r scale-scoring}
+# TODO before real-data use:
+# 1. Confirm item membership.
+# 2. Confirm reverse-keyed items and response ranges.
+# 3. Define the minimum answered-item rule.
+# Example reverse coding for a 1–7 item would be: reversed_item = 8 - original_item
+
+scored_data <- clean_data |>
+  mutate(
+    attachment_anxiety = rowMeans(
+      across(all_of(paste0("attachment_anxiety_", 1:4))), na.rm = TRUE
+    ),
+    rumination = rowMeans(
+      across(all_of(paste0("rumination_", 1:3))), na.rm = TRUE
+    )
+  ) |>
+  mutate(
+    attachment_anxiety = if_else(is.nan(attachment_anxiety), NA_real_, attachment_anxiety),
+    rumination = if_else(is.nan(rumination), NA_real_, rumination)
+  )
+```
+
+## Reliability analysis
+
+```{r reliability}
+attachment_items <- scored_data |>
+  select(all_of(paste0("attachment_anxiety_", 1:4)))
+
+alpha_output <- psych::alpha(attachment_items, check.keys = FALSE)
+alpha_table <- tibble(
+  analysis = data_label,
+  scale = "Attachment anxiety — example item set; verify",
+  alpha = unname(alpha_output$total$raw_alpha),
+  reporting_status = if (use_simulated_data) {
+    "Simulated example; not a study result"
+  } else {
+    "Pending comparison with verified study output"
+  }
+)
+kable(alpha_table, digits = 3)
+
+# Confirmed study-level value (scale/item set must be checked in final records): alpha = .891.
+```
+
+## KMO and exploratory factor analysis
+
+```{r kmo-efa}
+psychometric_items <- scored_data |>
+  select(starts_with("attachment_anxiety_"), starts_with("rumination_")) |>
+  drop_na()
+
+kmo_output <- psych::KMO(cor(psychometric_items))
+kmo_table <- tibble(
+  analysis = data_label,
+  overall_msa = unname(kmo_output$MSA),
+  reporting_status = if (use_simulated_data) {
+    "Simulated example; not the confirmed study KMO"
+  } else {
+    "Pending comparison with verified study output"
+  }
+)
+kable(kmo_table, digits = 3)
+
+# Confirmed study-level KMO = .812.
+# TODO: choose the number of factors using theory, scree/parallel analysis,
+# and the final item set. The two-factor solution below is only a code example.
+efa_example <- psych::fa(
+  psychometric_items,
+  nfactors = 2,
+  rotate = "oblimin",
+  fm = "minres"
+)
+
+efa_loadings <- as.data.frame(unclass(efa_example$loadings)) |>
+  rownames_to_column("item")
+head(efa_loadings) |> kable(digits = 3, caption = paste(data_label, "— example loadings"))
+```
+
+## ANOVA template
+
+```{r anova}
+# Placeholder operationalization: compares mean rumination across a categorical
+# attachment group. Replace with the exact final model specification.
+anova_model <- aov(rumination ~ attachment_group, data = scored_data)
+anova_table <- broom::tidy(anova_model) |>
+  mutate(
+    analysis = data_label,
+    reporting_status = if (use_simulated_data) {
+      "Simulated example; do not report"
+    } else {
+      "Pending verification against final study output"
+    }
+  )
+kable(anova_table, digits = 3)
+
+eta_table <- effectsize::eta_squared(anova_model) |>
+  as.data.frame() |>
+  mutate(analysis = data_label)
+kable(eta_table, digits = 3, caption = "Example effect-size workflow")
+
+# Confirmed qualitative conclusion: the study ANOVA showed attachment anxiety
+# and rumination were significantly related. Exact F, df, p, and effect size are
+# not confirmed and therefore are not hard-coded here.
+```
+
+## Regression template
+
+```{r regression}
+# Example model only. Confirm the outcome, predictors, covariates, coding scheme,
+# missing-data rule, and assumptions before running the final analysis.
+regression_model <- lm(
+  adjustment_score ~ attachment_anxiety + rumination + age,
+  data = scored_data
+)
+
+regression_table <- broom::tidy(regression_model, conf.int = TRUE) |>
+  mutate(
+    analysis = data_label,
+    reporting_status = if (use_simulated_data) {
+      "Simulated example; do not report"
+    } else {
+      "Pending verification"
+    }
+  )
+kable(regression_table, digits = 3)
+```
+
+## Visualization
+
+```{r visualization, fig.width=7, fig.height=5}
+relationship_plot <- scored_data |>
+  ggplot(aes(x = attachment_anxiety, y = rumination, color = attachment_group)) +
+  geom_point(alpha = 0.65) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = paste(data_label, "— attachment anxiety and rumination"),
+    subtitle = "Demonstration graphic; not evidence of the study effect",
+    x = "Attachment anxiety score (example scoring)",
+    y = "Rumination score (example scoring)",
+    color = "Attachment group"
+  ) +
+  theme_minimal(base_size = 12)
+
+relationship_plot
+
+ggsave(
+  here("figures", "attachment-anxiety-rumination-example.png"),
+  relationship_plot,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+```
+
+## Export results
+
+```{r export}
+readr::write_csv(alpha_table, here("results", "reliability-example.csv"))
+readr::write_csv(kmo_table, here("results", "kmo-example.csv"))
+readr::write_csv(anova_table, here("results", "anova-example.csv"))
+readr::write_csv(regression_table, here("results", "regression-example.csv"))
+
+writeLines(
+  c(
+    paste("Analysis mode:", data_label),
+    "Public notebook outputs are simulated examples unless authorized real data were supplied.",
+    "Confirmed study values: survey N=119; interviews n=19; KMO=.812; alpha=.891.",
+    "Confirmed ANOVA conclusion: attachment anxiety and rumination were significantly related.",
+    "All exact inferential statistics remain pending verification."
+  ),
+  here("results", "READ_ME_FIRST.txt")
+)
+```
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```
